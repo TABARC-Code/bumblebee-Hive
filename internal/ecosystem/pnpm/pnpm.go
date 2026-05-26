@@ -11,15 +11,12 @@ package pnpm
 import (
 	"bufio"
 	"bytes"
-	"errors"
-	"fmt"
-	"io"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/perplexityai/bumblebee/internal/model"
 	"github.com/perplexityai/bumblebee/internal/normalize"
+	"github.com/perplexityai/bumblebee/internal/readlimit"
 )
 
 const Ecosystem = model.EcosystemNPM // pnpm installs npm-registry packages; we keep ecosystem=npm.
@@ -151,7 +148,7 @@ func splitPnpmStoreDir(dir string) (name, version string) {
 // resolution.tarball are parsed into the in-memory entry for forward
 // compatibility but are not emitted on records in v0.1.
 func (s *Scanner) ScanLockfile(path string, base model.Record) error {
-	data, err := s.readBounded(path)
+	data, err := readlimit.ReadBounded(path, s.MaxFileSize, s.Diag)
 	if err != nil {
 		return err
 	}
@@ -161,8 +158,14 @@ func (s *Scanner) ScanLockfile(path string, base model.Record) error {
 			s.Diag(level, path, msg)
 		}
 	}
-	entries := parsePnpmPackages(data, diag)
-	directs := parsePnpmImporterDirects(data)
+	entries, err := parsePnpmPackages(data, diag)
+	if err != nil {
+		return err
+	}
+	directs, err := parsePnpmImporterDirects(data)
+	if err != nil {
+		return err
+	}
 
 	for _, e := range entries {
 		if e.name == "" || e.version == "" {
@@ -237,7 +240,7 @@ type pnpmEntry struct {
 // When a line under `packages:` has an unexpected indent (>0 but not exactly
 // 2 nor >=4 spaces) we emit a one-shot diagnostic via the optional `diag`
 // callback so silent drift becomes visible to operators.
-func parsePnpmPackages(data []byte, diag func(level, msg string)) []pnpmEntry {
+func parsePnpmPackages(data []byte, diag func(level, msg string)) ([]pnpmEntry, error) {
 	var out []pnpmEntry
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
@@ -333,7 +336,7 @@ func parsePnpmPackages(data []byte, diag func(level, msg string)) []pnpmEntry {
 		}
 	}
 	flush()
-	return out
+	return out, sc.Err()
 }
 
 func startsWithSpace(s string) bool {
@@ -358,9 +361,12 @@ func startsWithSpace(s string) bool {
 // suffixes such as `1.2.3(react@18)` or `1.2.3_react@18`. If a value looks
 // like a semver range rather than a concrete version, it is ignored so the
 // matching pass leaves DirectDependency unset ("unknown" rather than guessed).
-func parsePnpmImporterDirects(data []byte) map[string]struct{} {
+func parsePnpmImporterDirects(data []byte) (map[string]struct{}, error) {
 	out := map[string]struct{}{}
-	lines := splitLines(data)
+	lines, err := splitLines(data)
+	if err != nil {
+		return out, err
+	}
 
 	depHeaders := map[string]bool{
 		"dependencies:":         true,
@@ -466,17 +472,17 @@ func parsePnpmImporterDirects(data []byte) map[string]struct{} {
 			record(curName, v)
 		}
 	}
-	return out
+	return out, nil
 }
 
-func splitLines(data []byte) []string {
+func splitLines(data []byte) ([]string, error) {
 	var out []string
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for sc.Scan() {
 		out = append(out, sc.Text())
 	}
-	return out
+	return out, sc.Err()
 }
 
 func leadingSpaces(s string) int {
@@ -649,7 +655,7 @@ func looksLikeVersion(v string) bool {
 // MaxFileSize; its contents are not needed because the name and version
 // are derived from the store directory name.
 func (s *Scanner) ScanStorePackageJSON(path, projectPath, name, version string, base model.Record) error {
-	if _, err := s.readBounded(path); err != nil {
+	if _, err := readlimit.ReadBounded(path, s.MaxFileSize, s.Diag); err != nil {
 		return err
 	}
 	r := base
@@ -664,26 +670,4 @@ func (s *Scanner) ScanStorePackageJSON(path, projectPath, name, version string, 
 	r.Confidence = "medium"
 	s.Emit(r)
 	return nil
-}
-
-func (s *Scanner) readBounded(path string) ([]byte, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, errors.New("not a regular file")
-	}
-	if s.MaxFileSize > 0 && info.Size() > s.MaxFileSize {
-		if s.Diag != nil {
-			s.Diag("warn", path, fmt.Sprintf("skipping: size %d exceeds max %d", info.Size(), s.MaxFileSize))
-		}
-		return nil, fmt.Errorf("file %s exceeds max size %d", path, s.MaxFileSize)
-	}
-	return io.ReadAll(f)
 }

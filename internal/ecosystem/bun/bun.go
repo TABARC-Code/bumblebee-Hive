@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -22,6 +21,7 @@ import (
 
 	"github.com/perplexityai/bumblebee/internal/model"
 	"github.com/perplexityai/bumblebee/internal/normalize"
+	"github.com/perplexityai/bumblebee/internal/readlimit"
 )
 
 const Ecosystem = model.EcosystemNPM
@@ -44,7 +44,7 @@ func (s *Scanner) NoteBinaryLockfile(path string) {
 }
 
 func (s *Scanner) ScanTextLockfile(path string, base model.Record) error {
-	data, err := s.readBounded(path)
+	data, err := readlimit.ReadBounded(path, s.MaxFileSize, s.Diag)
 	if err != nil {
 		return err
 	}
@@ -305,26 +305,4 @@ func stripJSONC(in []byte) ([]byte, error) {
 		cleaned = append(cleaned, c)
 	}
 	return cleaned, nil
-}
-
-func (s *Scanner) readBounded(path string) ([]byte, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, errors.New("not a regular file")
-	}
-	if s.MaxFileSize > 0 && info.Size() > s.MaxFileSize {
-		if s.Diag != nil {
-			s.Diag("warn", path, fmt.Sprintf("skipping: size %d exceeds max %d", info.Size(), s.MaxFileSize))
-		}
-		return nil, fmt.Errorf("file %s exceeds max size %d", path, s.MaxFileSize)
-	}
-	return io.ReadAll(f)
 }

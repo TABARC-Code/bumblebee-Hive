@@ -7,16 +7,14 @@ package npm
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/perplexityai/bumblebee/internal/model"
 	"github.com/perplexityai/bumblebee/internal/normalize"
+	"github.com/perplexityai/bumblebee/internal/readlimit"
 )
 
 const Ecosystem = model.EcosystemNPM
@@ -123,7 +121,7 @@ func IsNodeModulesPackageJSON(path string) (bool, string) {
 
 // ScanLockfile parses an npm lockfile at path and emits records.
 func (s *Scanner) ScanLockfile(path string, base model.Record) error {
-	data, err := s.readBounded(path)
+	data, err := readlimit.ReadBounded(path, s.MaxFileSize, s.Diag)
 	if err != nil {
 		return err
 	}
@@ -213,7 +211,7 @@ func (s *Scanner) emitDepsV1(deps map[string]lockDepV1, path, projectPath, pm st
 
 // ScanNodeModulesPackageJSON reads metadata for a single installed package.
 func (s *Scanner) ScanNodeModulesPackageJSON(path, projectPath string, base model.Record) error {
-	data, err := s.readBounded(path)
+	data, err := readlimit.ReadBounded(path, s.MaxFileSize, s.Diag)
 	if err != nil {
 		return err
 	}
@@ -239,28 +237,6 @@ func (s *Scanner) ScanNodeModulesPackageJSON(path, projectPath string, base mode
 	r.Confidence = "medium"
 	s.Emit(r)
 	return nil
-}
-
-func (s *Scanner) readBounded(path string) ([]byte, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, errors.New("not a regular file")
-	}
-	if s.MaxFileSize > 0 && info.Size() > s.MaxFileSize {
-		if s.Diag != nil {
-			s.Diag("warn", path, fmt.Sprintf("skipping: size %d exceeds max %d", info.Size(), s.MaxFileSize))
-		}
-		return nil, fmt.Errorf("file %s exceeds max size %d", path, s.MaxFileSize)
-	}
-	return io.ReadAll(f)
 }
 
 // nameFromPackagesKey extracts the package name from a v2/v3 packages key

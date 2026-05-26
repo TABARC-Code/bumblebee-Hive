@@ -23,14 +23,12 @@ package browserext
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/perplexityai/bumblebee/internal/model"
+	"github.com/perplexityai/bumblebee/internal/readlimit"
 )
 
 const Ecosystem = model.EcosystemBrowserExtension
@@ -93,7 +91,7 @@ type chromiumManifest struct {
 // record. The Chromium variant (chrome, brave, edge, ...) is not stored
 // on the record; it is recoverable from source_file.
 func (s *Scanner) ScanChromiumExtension(manifestPath, extID, versionDir, profileDir string, base model.Record) error {
-	data, err := s.readBounded(manifestPath)
+	data, err := readlimit.ReadBounded(manifestPath, s.MaxFileSize, s.Diag)
 	if err != nil {
 		return err
 	}
@@ -143,7 +141,7 @@ func (s *Scanner) ScanChromiumExtension(manifestPath, extID, versionDir, profile
 
 func (s *Scanner) lookupLocaleMessage(versionDir, locale, key string) string {
 	path := filepath.Join(versionDir, "_locales", locale, "messages.json")
-	data, err := s.readBounded(path)
+	data, err := readlimit.ReadBounded(path, s.MaxFileSize, s.Diag)
 	if err != nil {
 		// Fall back to en if available and different.
 		if locale != "en" {
@@ -211,7 +209,7 @@ func IsFirefoxExtensionsJSON(path string) bool {
 // ScanFirefoxExtensions reads extensions.json and emits one record per
 // active add-on (system add-ons and themes are skipped).
 func (s *Scanner) ScanFirefoxExtensions(path string, base model.Record) error {
-	data, err := s.readBounded(path)
+	data, err := readlimit.ReadBounded(path, s.MaxFileSize, s.Diag)
 	if err != nil {
 		return err
 	}
@@ -249,26 +247,4 @@ func (s *Scanner) ScanFirefoxExtensions(path string, base model.Record) error {
 		s.Emit(r)
 	}
 	return nil
-}
-
-func (s *Scanner) readBounded(path string) ([]byte, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, errors.New("not a regular file")
-	}
-	if s.MaxFileSize > 0 && info.Size() > s.MaxFileSize {
-		if s.Diag != nil {
-			s.Diag("warn", path, fmt.Sprintf("skipping: size %d exceeds max %d", info.Size(), s.MaxFileSize))
-		}
-		return nil, fmt.Errorf("file %s exceeds max size %d", path, s.MaxFileSize)
-	}
-	return io.ReadAll(f)
 }

@@ -292,6 +292,15 @@ func build(schemaVersion string, in []Entry) (*Catalog, error) {
 		if len(e.Versions) == 0 {
 			return nil, fmt.Errorf("catalog entry %q: at least one version is required (v0.1 only supports exact-version matching)", e.ID)
 		}
+		if !model.IsSupportedEcosystem(e.Ecosystem) {
+			return nil, fmt.Errorf("catalog entry %q: unsupported ecosystem %q (supported: %s)",
+				e.ID, e.Ecosystem, strings.Join(model.SupportedEcosystems(), ", "))
+		}
+		for _, v := range e.Versions {
+			if strings.TrimSpace(v) == "" {
+				return nil, fmt.Errorf("catalog entry %q: versions must not contain empty strings", e.ID)
+			}
+		}
 		e.normalized = normalizeName(e.Ecosystem, e.Package)
 		c.Entries = append(c.Entries, e)
 	}

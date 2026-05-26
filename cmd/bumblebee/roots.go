@@ -83,15 +83,30 @@ func resolveRoots(profile string, explicit []string, opts rootsOpts) (roots []sc
 		}
 		roots = make([]scanner.Root, 0, len(explicit))
 		for _, p := range explicit {
-			kind := classifyRoot(p, profile)
-			if isBroadHomeRoot(p) && profile != model.ProfileDeep {
+			// Resolve symlinks at the boundary so the walker never follows
+			// symlinks deeper inside the tree, and so missing or broken
+			// explicit roots are caught here before any scan_summary is
+			// emitted (preventing a false status=complete).
+			resolved, err := filepath.EvalSymlinks(p)
+			if err != nil {
+				return nil, nil, fmt.Errorf("--root %q: %w", p, err)
+			}
+			info, err := os.Stat(resolved)
+			if err != nil {
+				return nil, nil, fmt.Errorf("--root %q: %w", p, err)
+			}
+			if !info.IsDir() {
+				return nil, nil, fmt.Errorf("--root %q: not a directory", p)
+			}
+			kind := classifyRoot(resolved, profile)
+			if isBroadHomeRoot(resolved) && profile != model.ProfileDeep {
 				return nil, nil, fmt.Errorf(
 					"profile=%s refuses broad home/filesystem root %q.\n"+
 						"baseline and project profiles are source/root-allowlist inventories — they do not walk bare home directories.\n"+
 						"For an incident-response exposure scan that does walk home roots, re-run with --profile deep.",
 					profile, p)
 			}
-			roots = append(roots, scanner.Root{Path: p, Kind: kind})
+			roots = append(roots, scanner.Root{Path: resolved, Kind: kind})
 		}
 		return roots, notes, nil
 	}

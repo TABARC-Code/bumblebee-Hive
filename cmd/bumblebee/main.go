@@ -290,6 +290,12 @@ func runScan(args []string) int {
 		}
 		exitCode = 1
 	}
+	// Timeout and cancellation (SIGINT/SIGTERM) both produce incomplete data;
+	// never let them produce status=complete even when runErr is nil.
+	if (res.TimedOut || ctx.Err() != nil) && status == model.ScanStatusComplete {
+		status = model.ScanStatusPartial
+		exitCode = 1
+	}
 
 	if o.emitSummary {
 		summaryRoots := make([]model.SummaryRoot, 0, len(roots))
