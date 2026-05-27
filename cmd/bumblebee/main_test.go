@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -8,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/perplexityai/bumblebee/internal/model"
+	"github.com/perplexityai/bumblebee/internal/output"
+	"github.com/perplexityai/bumblebee/internal/scanner"
 )
 
 func TestResolveDeviceIDUnsetFlag(t *testing.T) {
@@ -651,5 +655,130 @@ func TestRunRootsRejectsUnknownProfile(t *testing.T) {
 	code := runRoots([]string{"--profile", "scheduled"})
 	if code != 2 {
 		t.Fatalf("runRoots --profile=scheduled exit = %d, want 2 (unknown profile)", code)
+	}
+}
+
+// ── scanExitStatus contract tests ────────────────────────────────────────────
+
+func TestScanExitStatusCleanScanIsComplete(t *testing.T) {
+	status, errMsg, exitCode := scanExitStatus(scanner.Result{}, nil, output.SinkStats{})
+	if status != model.ScanStatusComplete || exitCode != 0 || errMsg != "" {
+		t.Fatalf("status=%q err=%q exit=%d, want complete/empty/0", status, errMsg, exitCode)
+	}
+}
+
+func TestScanExitStatusTimeoutIsPartial(t *testing.T) {
+	status, errMsg, exitCode := scanExitStatus(
+		scanner.Result{TimedOut: true},
+		context.DeadlineExceeded,
+		output.SinkStats{},
+	)
+	if status != model.ScanStatusPartial || exitCode != 1 {
+		t.Fatalf("status=%q exit=%d, want partial/1", status, exitCode)
+	}
+	if errMsg == "" {
+		t.Fatal("timeout should populate error message")
+	}
+}
+
+func TestScanExitStatusTimeoutWithNilErrStillPartial(t *testing.T) {
+	// Scanner may set TimedOut but return nil runErr; status must still be partial.
+	status, errMsg, exitCode := scanExitStatus(scanner.Result{TimedOut: true}, nil, output.SinkStats{})
+	if status != model.ScanStatusPartial || exitCode != 1 {
+		t.Fatalf("status=%q exit=%d, want partial/1", status, exitCode)
+	}
+	if !strings.Contains(errMsg, "timed out") {
+		t.Fatalf("errMsg = %q, want timed-out message", errMsg)
+	}
+}
+
+func TestScanExitStatusCancellationIsPartial(t *testing.T) {
+	status, _, exitCode := scanExitStatus(scanner.Result{}, context.Canceled, output.SinkStats{})
+	if status != model.ScanStatusPartial || exitCode != 1 {
+		t.Fatalf("status=%q exit=%d, want partial/1", status, exitCode)
+	}
+}
+
+func TestScanExitStatusHTTPFailureIsPartial(t *testing.T) {
+	status, errMsg, exitCode := scanExitStatus(
+		scanner.Result{},
+		nil,
+		output.SinkStats{HTTPBatchesFailed: 1},
+	)
+	if status != model.ScanStatusPartial || exitCode != 1 {
+		t.Fatalf("status=%q exit=%d, want partial/1", status, exitCode)
+	}
+	if !strings.Contains(errMsg, "http sink") {
+		t.Fatalf("errMsg = %q, want http sink message", errMsg)
+	}
+}
+
+func TestScanExitStatusZeroProgressErrorIsError(t *testing.T) {
+	status, _, exitCode := scanExitStatus(scanner.Result{}, errors.New("boom"), output.SinkStats{})
+	if status != model.ScanStatusError || exitCode != 1 {
+		t.Fatalf("status=%q exit=%d, want error/1", status, exitCode)
+	}
+}
+
+func TestScanExitStatusPartialProgressErrorIsPartial(t *testing.T) {
+	// Files were considered but no records emitted — scan did something.
+	status, _, exitCode := scanExitStatus(
+		scanner.Result{FilesConsidered: 1},
+		errors.New("boom"),
+		output.SinkStats{},
+	)
+	if status != model.ScanStatusPartial || exitCode != 1 {
+		t.Fatalf("status=%q exit=%d, want partial/1", status, exitCode)
+	}
+}
+
+// ── explicit root validation tests ───────────────────────────────────────────
+
+func TestResolveRootsExplicitMissingRootFails(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+	_, _, err := resolveRoots(model.ProfileDeep, []string{missing}, rootsOpts{})
+	if err == nil {
+		t.Fatal("expected error for missing explicit root")
+	}
+	if !strings.Contains(err.Error(), "explicit root") {
+		t.Fatalf("error should identify the explicit root, got: %v", err)
+	}
+}
+
+func TestResolveRootsExplicitSymlinkRootResolves(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "target")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	roots, _, err := resolveRoots(model.ProfileDeep, []string{link}, rootsOpts{})
+	if err != nil {
+		t.Fatalf("symlink explicit root should resolve: %v", err)
+	}
+	if len(roots) != 1 {
+		t.Fatalf("roots = %v, want exactly one", roots)
+	}
+	if roots[0].Path != target {
+		t.Fatalf("root path = %q, want resolved target %q", roots[0].Path, target)
+	}
+}
+
+func TestResolveExplicitRootEmptyValue(t *testing.T) {
+	if _, err := resolveExplicitRoot("   "); err == nil {
+		t.Fatal("expected error for empty explicit root")
+	}
+}
+
+func TestResolveExplicitRootNotDirectory(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if _, err := resolveExplicitRoot(f.Name()); err == nil {
+		t.Fatalf("expected error for non-directory explicit root %q", f.Name())
 	}
 }

@@ -83,20 +83,9 @@ func resolveRoots(profile string, explicit []string, opts rootsOpts) (roots []sc
 		}
 		roots = make([]scanner.Root, 0, len(explicit))
 		for _, p := range explicit {
-			// Resolve symlinks at the boundary so the walker never follows
-			// symlinks deeper inside the tree, and so missing or broken
-			// explicit roots are caught here before any scan_summary is
-			// emitted (preventing a false status=complete).
-			resolved, err := filepath.EvalSymlinks(p)
+			resolved, err := resolveExplicitRoot(p)
 			if err != nil {
-				return nil, nil, fmt.Errorf("--root %q: %w", p, err)
-			}
-			info, err := os.Stat(resolved)
-			if err != nil {
-				return nil, nil, fmt.Errorf("--root %q: %w", p, err)
-			}
-			if !info.IsDir() {
-				return nil, nil, fmt.Errorf("--root %q: not a directory", p)
+				return nil, nil, err
 			}
 			kind := classifyRoot(resolved, profile)
 			if isBroadHomeRoot(resolved) && profile != model.ProfileDeep {
@@ -574,18 +563,75 @@ func browserExtensionCandidateRoots(home string) []string {
 	return roots
 }
 
+// resolveExplicitRoot validates and returns the real path for an operator-
+// supplied --root argument. It makes the path absolute, follows any symlink
+// once, and confirms the result is an accessible directory. A missing,
+// inaccessible, or non-directory path is returned as an error so the caller
+// can fail before any scan_summary is emitted (preventing a false
+// status=complete).
+func resolveExplicitRoot(path string) (string, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", fmt.Errorf("explicit root %q: empty value", path)
+	}
+	abs, err := filepath.Abs(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("explicit root %q: %w", path, err)
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("explicit root %q is not accessible: %w", path, err)
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", fmt.Errorf("explicit root %q is not accessible: %w", path, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("explicit root %q is not a directory", path)
+	}
+	return resolved, nil
+}
+
+// resolveCandidateRoot resolves the real path of an auto-discovered profile
+// default root (e.g. a Homebrew prefix or per-user toolchain dir). Unlike
+// resolveExplicitRoot it is soft: absent, broken-symlink, or non-directory
+// paths return (false) rather than an error, because absent defaults are
+// normal on most hosts.
+func resolveCandidateRoot(path string) (string, bool) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", false
+	}
+	abs, err := filepath.Abs(trimmed)
+	if err != nil {
+		abs = trimmed
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", false
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || !info.IsDir() {
+		return "", false
+	}
+	return resolved, true
+}
+
 // filterExistingRoots returns the subset of candidate roots that exist
 // as directories, along with a short note describing how many were
-// skipped. Absent candidates are normal on most developer machines.
+// skipped. Symlinks are resolved to real paths so the walker never follows
+// symlinks deeper inside the tree. Absent candidates are normal on most
+// developer machines.
 func filterExistingRoots(candidates []scanner.Root) ([]scanner.Root, []string) {
 	var present []scanner.Root
 	skipped := 0
 	for _, c := range candidates {
-		info, err := os.Stat(c.Path)
-		if err != nil || !info.IsDir() {
+		resolved, ok := resolveCandidateRoot(c.Path)
+		if !ok {
 			skipped++
 			continue
 		}
+		c.Path = resolved
 		present = append(present, c)
 	}
 	if len(present) == 0 {
