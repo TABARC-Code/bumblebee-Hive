@@ -302,3 +302,30 @@ catalog list and review guidance.
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
+
+---
+
+## About this fork
+
+This is a fork of [Perplexity AI's bumblebee](https://github.com/perplexityai/bumblebee),
+maintained by **TABARC-Code**.
+
+Credit for the original tool goes fully to Perplexity AI. This fork exists to
+experiment with hardening and extension ideas without claiming independent
+authorship of the underlying design.
+
+**Work in progress.** This fork is an active experiment. Things may break,
+change without notice, or be mid-thought. Use the upstream Perplexity AI repo
+if you need something stable.
+
+### How this fork is built
+
+This fork is developed using [Claude Code](https://claude.ai/code) (Anthropic's
+CLI for Claude) as an AI coding partner — a combination of vibe coding and
+hands-on human review. The hardening changes, catalog validation improvements,
+and test coverage additions in this fork were produced through that
+human + AI collaboration.
+
+If you're curious about using Claude Code for this kind of work, the
+[Claude Code docs](https://docs.anthropic.com/en/docs/claude-code) are a good
+starting point.
