@@ -227,7 +227,10 @@ packages:
   /lodash/4.17.21:
     resolution: {integrity: sha512-x}
 `)
-	got := parsePnpmImporterDirects(body)
+	got, err := parsePnpmImporterDirects(body)
+	if err != nil {
+		t.Fatal(err)
+	}
 	wantKeys := []string{
 		directKey("lodash", "4.17.21"),
 		directKey("@scope/foo", "1.2.3"),
@@ -259,7 +262,10 @@ packages:
   /lodash@4.17.21:
     resolution: {integrity: x}
 `)
-	got := parsePnpmImporterDirects(body)
+	got, err := parsePnpmImporterDirects(body)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := got[directKey("lodash", "4.17.21")]; !ok {
 		t.Error("expected lodash@4.17.21 to be direct")
 	}

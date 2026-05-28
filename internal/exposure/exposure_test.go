@@ -404,3 +404,35 @@ func TestParseCatalogRejectsUnsupportedSchemaVersion(t *testing.T) {
 		t.Fatal("expected unsupported schema_version error")
 	}
 }
+
+func TestParseRejectsUnsupportedEcosystem(t *testing.T) {
+	bad := `{"schema_version":"0.1.0","entries":[{"id":"bad-eco","ecosystem":"npn","package":"x","versions":["1.0.0"]}]}`
+	if _, err := Parse([]byte(bad)); err == nil {
+		t.Fatal("expected error for unsupported ecosystem value")
+	}
+}
+
+func TestParseRejectsEmptyVersionString(t *testing.T) {
+	bad := `{"schema_version":"0.1.0","entries":[{"id":"empty-ver","ecosystem":"npm","package":"x","versions":["1.0.0","  "]}]}`
+	if _, err := Parse([]byte(bad)); err == nil {
+		t.Fatal("expected error for empty version string in versions array")
+	}
+}
+
+func TestParseTrimsWhitespaceFromFields(t *testing.T) {
+	// Fields with leading/trailing whitespace should be accepted and trimmed.
+	raw := `{"schema_version":"0.1.0","entries":[{"id":" adv-trim ","ecosystem":" npm ","package":" left-pad ","versions":[" 1.3.0 "]}]}`
+	c, err := Parse([]byte(raw))
+	if err != nil {
+		t.Fatalf("parse with whitespace fields: %v", err)
+	}
+	if c.Len() != 1 {
+		t.Fatalf("Len=%d, want 1", c.Len())
+	}
+	if c.Entries[0].ID != "adv-trim" {
+		t.Errorf("ID = %q, want trimmed %q", c.Entries[0].ID, "adv-trim")
+	}
+	if c.Entries[0].Versions[0] != "1.3.0" {
+		t.Errorf("Versions[0] = %q, want trimmed %q", c.Entries[0].Versions[0], "1.3.0")
+	}
+}

@@ -14,15 +14,14 @@ package rubygems
 import (
 	"bufio"
 	"bytes"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/perplexityai/bumblebee/internal/model"
+	"github.com/perplexityai/bumblebee/internal/readlimit"
 )
 
 const Ecosystem = model.EcosystemRubyGems
@@ -37,12 +36,15 @@ func IsGemfileLock(base string) bool { return base == "Gemfile.lock" }
 func IsGemspec(base string) bool     { return strings.HasSuffix(base, ".gemspec") }
 
 func (s *Scanner) ScanGemfileLock(path string, base model.Record) error {
-	data, err := s.readBounded(path)
+	data, err := readlimit.ReadBounded(path, s.MaxFileSize, s.Diag)
 	if err != nil {
 		return err
 	}
 	projectPath := filepath.Dir(path)
-	gems := parseGemfileLock(data)
+	gems, err := parseGemfileLock(data)
+	if err != nil {
+		return err
+	}
 	for _, g := range gems {
 		r := base
 		r.Ecosystem = Ecosystem
@@ -65,7 +67,7 @@ type gemEntry struct {
 	section string
 }
 
-func parseGemfileLock(data []byte) []gemEntry {
+func parseGemfileLock(data []byte) ([]gemEntry, error) {
 	var out []gemEntry
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
@@ -105,7 +107,7 @@ func parseGemfileLock(data []byte) []gemEntry {
 			}
 		}
 	}
-	return out
+	return out, sc.Err()
 }
 
 var gemSpecRe = regexp.MustCompile(`^([A-Za-z0-9_.\-]+)\s*\(([^)]+)\)$`)
@@ -233,7 +235,7 @@ var (
 )
 
 func (s *Scanner) ScanGemspec(path, projectPath string, base model.Record) error {
-	data, err := s.readBounded(path)
+	data, err := readlimit.ReadBounded(path, s.MaxFileSize, s.Diag)
 	if err != nil {
 		return err
 	}
@@ -290,26 +292,4 @@ func firstSubmatch(re *regexp.Regexp, data []byte) string {
 		return ""
 	}
 	return string(m[1])
-}
-
-func (s *Scanner) readBounded(path string) ([]byte, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, errors.New("not a regular file")
-	}
-	if s.MaxFileSize > 0 && info.Size() > s.MaxFileSize {
-		if s.Diag != nil {
-			s.Diag("warn", path, fmt.Sprintf("skipping: size %d exceeds max %d", info.Size(), s.MaxFileSize))
-		}
-		return nil, fmt.Errorf("file %s exceeds max size %d", path, s.MaxFileSize)
-	}
-	return io.ReadAll(f)
 }

@@ -28,7 +28,10 @@ DEPENDENCIES
 BUNDLED WITH
    2.5.0
 `
-	gems := parseGemfileLock([]byte(body))
+	gems, err := parseGemfileLock([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(gems) != 3 {
 		t.Fatalf("want 3, got %d: %+v", len(gems), gems)
 	}

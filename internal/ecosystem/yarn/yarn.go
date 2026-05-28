@@ -11,15 +11,13 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/perplexityai/bumblebee/internal/model"
 	"github.com/perplexityai/bumblebee/internal/normalize"
+	"github.com/perplexityai/bumblebee/internal/readlimit"
 )
 
 const Ecosystem = model.EcosystemNPM
@@ -33,12 +31,15 @@ type Scanner struct {
 func IsLockfile(base string) bool { return base == "yarn.lock" }
 
 func (s *Scanner) ScanLockfile(path string, base model.Record) error {
-	data, err := s.readBounded(path)
+	data, err := readlimit.ReadBounded(path, s.MaxFileSize, s.Diag)
 	if err != nil {
 		return err
 	}
 	projectPath := filepath.Dir(path)
-	entries := parseYarnLock(data)
+	entries, err := parseYarnLock(data)
+	if err != nil {
+		return err
+	}
 	directs := loadDirectDeps(filepath.Join(projectPath, "package.json"), s.MaxFileSize, s.Diag)
 	for _, e := range entries {
 		if e.name == "" || e.version == "" {
@@ -123,7 +124,7 @@ type yarnEntry struct {
 	version string
 }
 
-func parseYarnLock(data []byte) []yarnEntry {
+func parseYarnLock(data []byte) ([]yarnEntry, error) {
 	var out []yarnEntry
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
@@ -162,7 +163,7 @@ func parseYarnLock(data []byte) []yarnEntry {
 		}
 	}
 	flush()
-	return out
+	return out, sc.Err()
 }
 
 func trimField(line, key string) string {
@@ -241,26 +242,4 @@ func unquote(s string) string {
 		}
 	}
 	return s
-}
-
-func (s *Scanner) readBounded(path string) ([]byte, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, errors.New("not a regular file")
-	}
-	if s.MaxFileSize > 0 && info.Size() > s.MaxFileSize {
-		if s.Diag != nil {
-			s.Diag("warn", path, fmt.Sprintf("skipping: size %d exceeds max %d", info.Size(), s.MaxFileSize))
-		}
-		return nil, fmt.Errorf("file %s exceeds max size %d", path, s.MaxFileSize)
-	}
-	return io.ReadAll(f)
 }

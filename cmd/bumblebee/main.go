@@ -29,6 +29,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -269,27 +270,8 @@ func runScan(args []string) int {
 		emitter.Diag("error", "", runErr.Error())
 	}
 
-	exitCode := 0
-	status := model.ScanStatusComplete
-	errMsg := ""
 	sinkStats := emitter.SinkStats()
-	switch {
-	case runErr != nil && res.RecordsEmitted > 0:
-		status = model.ScanStatusPartial
-		errMsg = runErr.Error()
-		exitCode = 1
-	case runErr != nil:
-		status = model.ScanStatusError
-		errMsg = runErr.Error()
-		exitCode = 1
-	}
-	if sinkStats.HTTPBatchesFailed > 0 && status == model.ScanStatusComplete {
-		status = model.ScanStatusPartial
-		if errMsg == "" {
-			errMsg = "http sink delivery failed"
-		}
-		exitCode = 1
-	}
+	status, errMsg, exitCode := scanExitStatus(res, runErr, sinkStats)
 
 	if o.emitSummary {
 		summaryRoots := make([]model.SummaryRoot, 0, len(roots))
@@ -404,6 +386,58 @@ func newRunID() string {
 	var b [16]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
+}
+
+// scanExitStatus translates scanner and sink outcomes into the public
+// scan_summary status contract. The invariant is strict: status=complete means
+// the configured scan finished without timeout, cancellation, scanner error, or
+// failed HTTP delivery. Anything less is not promotable as receiver-side current
+// state.
+//
+// Exported as a separate function so it can be unit-tested without running a
+// full scan.
+func scanExitStatus(res scanner.Result, runErr error, sinkStats output.SinkStats) (status, errMsg string, exitCode int) {
+	status = model.ScanStatusComplete
+
+	switch {
+	case res.TimedOut:
+		// Deadline exceeded: the scan was cut short by --max-duration.
+		status = model.ScanStatusPartial
+		if runErr != nil {
+			errMsg = runErr.Error()
+		} else {
+			errMsg = "scan timed out"
+		}
+		exitCode = 1
+
+	case errors.Is(runErr, context.Canceled):
+		// Explicit cancellation: SIGINT/SIGTERM or parent-context cancel.
+		status = model.ScanStatusPartial
+		errMsg = runErr.Error()
+		exitCode = 1
+
+	case runErr != nil && (res.RecordsEmitted > 0 || res.FindingsEmitted > 0 || res.FilesConsidered > 0):
+		// Scan error after partial progress: data exists but may be incomplete.
+		status = model.ScanStatusPartial
+		errMsg = runErr.Error()
+		exitCode = 1
+
+	case runErr != nil:
+		// Scan error with zero progress: nothing useful was produced.
+		status = model.ScanStatusError
+		errMsg = runErr.Error()
+		exitCode = 1
+	}
+
+	if sinkStats.HTTPBatchesFailed > 0 && status == model.ScanStatusComplete {
+		status = model.ScanStatusPartial
+		if errMsg == "" {
+			errMsg = "http sink delivery failed"
+		}
+		exitCode = 1
+	}
+
+	return status, errMsg, exitCode
 }
 
 func normalizeProfile(profile string) (string, error) {

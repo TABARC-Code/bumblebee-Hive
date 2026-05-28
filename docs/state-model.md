@@ -14,8 +14,10 @@ Only promote records from a run after receiving a matching `scan_summary` with
 `status=complete`.
 
 Do not let package rows without a complete summary remove packages from current
-state. Treat `partial`, `error`, timeout, and missing-summary runs as raw
-evidence only; the previous complete run remains authoritative.
+state. Treat `partial`, `error`, and missing-summary runs as raw evidence only;
+the previous complete run remains authoritative. Scans interrupted by
+`--max-duration` timeout or SIGINT/SIGTERM produce `status=partial` with
+`timed_out=true` set in the `scan_summary` where applicable.
 
 ## Recommended tables
 

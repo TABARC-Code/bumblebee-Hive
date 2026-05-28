@@ -9,8 +9,6 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -18,6 +16,7 @@ import (
 
 	"github.com/perplexityai/bumblebee/internal/model"
 	"github.com/perplexityai/bumblebee/internal/normalize"
+	"github.com/perplexityai/bumblebee/internal/readlimit"
 )
 
 const Ecosystem = model.EcosystemPyPI
@@ -54,7 +53,7 @@ func IsEggInfoPKGInfo(path string) (bool, string) {
 }
 
 func (s *Scanner) ScanDistInfo(metadataPath, distInfoDir string, base model.Record) error {
-	data, err := s.readBounded(metadataPath)
+	data, err := readlimit.ReadBounded(metadataPath, s.MaxFileSize, s.Diag)
 	if err != nil {
 		return err
 	}
@@ -104,7 +103,7 @@ func (s *Scanner) ScanDistInfo(metadataPath, distInfoDir string, base model.Reco
 }
 
 func (s *Scanner) ScanEggInfo(pkgInfoPath, eggInfoDir string, base model.Record) error {
-	data, err := s.readBounded(pkgInfoPath)
+	data, err := readlimit.ReadBounded(pkgInfoPath, s.MaxFileSize, s.Diag)
 	if err != nil {
 		return err
 	}
@@ -132,28 +131,6 @@ func (s *Scanner) ScanEggInfo(pkgInfoPath, eggInfoDir string, base model.Record)
 	}
 	s.Emit(r)
 	return nil
-}
-
-func (s *Scanner) readBounded(path string) ([]byte, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, errors.New("not a regular file")
-	}
-	if s.MaxFileSize > 0 && info.Size() > s.MaxFileSize {
-		if s.Diag != nil {
-			s.Diag("warn", path, fmt.Sprintf("skipping: size %d exceeds max %d", info.Size(), s.MaxFileSize))
-		}
-		return nil, fmt.Errorf("file %s exceeds max size %d", path, s.MaxFileSize)
-	}
-	return io.ReadAll(f)
 }
 
 func (s *Scanner) readOptional(path string) ([]byte, bool) {

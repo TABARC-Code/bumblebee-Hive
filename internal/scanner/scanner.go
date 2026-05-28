@@ -475,13 +475,28 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		res.TimedOut = true
 	}
+
+	// Build runErr from walk and context errors. Context errors (timeout,
+	// cancellation) are surfaced here so callers can detect them through
+	// runErr via errors.Is rather than needing to inspect the context.
+	var runErr error
+	if walkErr != nil {
+		runErr = walkErr
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		if runErr != nil {
+			runErr = fmt.Errorf("%v; %w", runErr, ctxErr)
+		} else {
+			runErr = ctxErr
+		}
+	}
 	if emitErr != nil {
-		if walkErr != nil {
-			return res, fmt.Errorf("%v; %w", walkErr, emitErr)
+		if runErr != nil {
+			return res, fmt.Errorf("%v; %w", runErr, emitErr)
 		}
 		return res, emitErr
 	}
-	return res, walkErr
+	return res, runErr
 }
 
 // rootPaths is a small adapter so the walker keeps its []string contract.

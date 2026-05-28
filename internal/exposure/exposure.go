@@ -280,17 +280,32 @@ func build(schemaVersion string, in []Entry) (*Catalog, error) {
 	c := &Catalog{SchemaVersion: schemaVersion, index: map[string][]*Entry{}}
 	for i := range in {
 		e := in[i]
+		// Trim whitespace from string fields first so validation catches
+		// hand-edited catalogs where a field is all-whitespace.
+		e.ID = strings.TrimSpace(e.ID)
+		e.Ecosystem = strings.TrimSpace(e.Ecosystem)
+		e.Package = strings.TrimSpace(e.Package)
 		if e.ID == "" {
 			return nil, fmt.Errorf("catalog entry %d: missing id", i)
 		}
 		if e.Ecosystem == "" {
 			return nil, fmt.Errorf("catalog entry %q: missing ecosystem", e.ID)
 		}
+		if !model.IsSupportedEcosystem(e.Ecosystem) {
+			return nil, fmt.Errorf("catalog entry %q: unsupported ecosystem %q (supported: %s)",
+				e.ID, e.Ecosystem, strings.Join(model.SupportedEcosystems(), ", "))
+		}
 		if e.Package == "" {
 			return nil, fmt.Errorf("catalog entry %q: missing package", e.ID)
 		}
 		if len(e.Versions) == 0 {
 			return nil, fmt.Errorf("catalog entry %q: at least one version is required (v0.1 only supports exact-version matching)", e.ID)
+		}
+		for j, v := range e.Versions {
+			e.Versions[j] = strings.TrimSpace(v)
+			if e.Versions[j] == "" {
+				return nil, fmt.Errorf("catalog entry %q: versions[%d] is empty", e.ID, j)
+			}
 		}
 		e.normalized = normalizeName(e.Ecosystem, e.Package)
 		c.Entries = append(c.Entries, e)

@@ -87,7 +87,7 @@ fixtures:
 
 ```sh
 bumblebee selftest
-# selftest OK (2 findings in 1ms)
+# selftest OK (3 findings in 1ms)
 ```
 
 The fixtures live inside the binary, use deliberately fake package
@@ -141,7 +141,12 @@ bumblebee roots --profile baseline
 ```
 
 `--root` is a filesystem path to scan; repeatable, required for `deep`,
-optional for the other profiles. `--ecosystem` is repeatable and
+optional for the other profiles. Explicit `--root` paths are validated
+before the scan starts: a missing path, a non-directory target, or a
+broken symlink is a fatal error before any output is written. Symlinks
+in explicit `--root` paths are resolved to the real path at the root
+boundary; symlinks encountered deeper inside the tree are not followed
+during the walk. `--ecosystem` is repeatable and
 comma-separated. `--exposure-catalog` accepts a JSON file or a directory
 of `*.json` catalogs (merged non-recursively, all files must share
 `schema_version`). `--findings-only` requires `--exposure-catalog` and
@@ -155,6 +160,14 @@ run ends with a `scan_summary` record; receivers use it to decide whether
 to promote a run to current state. See [docs/transport.md](docs/transport.md)
 for HTTPS/file output and [docs/state-model.md](docs/state-model.md) for the
 receiver-side current-state model.
+
+The `status` field on `scan_summary` has three values:
+
+| `status` | Meaning |
+|---|---|
+| `complete` | Scan ran to full completion. Safe to promote as current inventory. |
+| `partial` | Scan was interrupted — by timeout (`--max-duration`), cancellation (SIGINT/SIGTERM), or HTTP delivery failure — and may not cover all configured roots. Treat as supplemental evidence only; the previous `complete` run remains authoritative. |
+| `error` | Scan failed entirely (no records emitted). |
 
 Package record:
 
@@ -268,8 +281,11 @@ Minimal JSON, exact `(ecosystem, name, version)` matching only:
 ```
 
 The catalog must be a JSON object with `schema_version` and `entries`
-keys. Bare top-level arrays are rejected. Unsupported future
-`schema_version` values are rejected. Multiple catalog files can be
+keys. Bare top-level arrays are rejected. All entries are validated at
+load time: unsupported `schema_version` values, unrecognised `ecosystem`
+values (must be one of the values in the Coverage table above), missing
+required entry fields, and empty strings in the `versions` list are all
+rejected as load-time errors. Multiple catalog files can be
 loaded together by pointing `--exposure-catalog` at a directory; see
 the flag description above.
 
@@ -286,3 +302,30 @@ catalog list and review guidance.
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
+
+---
+
+## About this fork
+
+This is a fork of [Perplexity AI's bumblebee](https://github.com/perplexityai/bumblebee),
+maintained by **TABARC-Code**.
+
+Credit for the original tool goes fully to Perplexity AI. This fork exists to
+experiment with hardening and extension ideas without claiming independent
+authorship of the underlying design.
+
+**Work in progress.** This fork is an active experiment. Things may break,
+change without notice, or be mid-thought. Use the upstream Perplexity AI repo
+if you need something stable.
+
+### How this fork is built
+
+This fork is developed using [Claude Code](https://claude.ai/code) (Anthropic's
+CLI for Claude) as an AI coding partner — a combination of vibe coding and
+hands-on human review. The hardening changes, catalog validation improvements,
+and test coverage additions in this fork were produced through that
+human + AI collaboration.
+
+If you're curious about using Claude Code for this kind of work, the
+[Claude Code docs](https://docs.anthropic.com/en/docs/claude-code) are a good
+starting point.
